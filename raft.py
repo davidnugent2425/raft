@@ -3,10 +3,6 @@
 
 class Server:
     def __init__(self):
-        self.is_canditate = False
-        self.logs = []
-        self.is_leader = False
-        self.term_num = 1
 
         # Variables used by all machines:
 
