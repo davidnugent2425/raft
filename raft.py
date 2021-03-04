@@ -35,13 +35,13 @@ class Server:
     def process_append_entries_rpc(self, rpc):
         
         # case when we receive rpc from an old leader
-        if rpc.term < self.current_term: return False
+        if rpc.term < self.current_term: return self.current_term, False
         # case when there is a gap between the logs we have and the logs
         # we are receiving
         curr_num_entries = len(self.log)
         if curr_num_entries < rpc.prev_log_idx or \
            self.log[prev_log_term][0] != rpc.prev_log_term:
-            return False
+            return rpc.term, False
       
         # which index of rpc.entries we should start at when appending to our
         # current log (will not be 0 if we have previously received some of the same        # entries)
@@ -69,7 +69,7 @@ class Server:
         if rpc.leader_commit > self.commit_index:
             self.commit_index = min(rpc.leader_commit, len(self.log)-1)
         
-        return True
+        return rpc.term, True
 
 
     def __str__(self):
@@ -115,6 +115,25 @@ class AppendEntries:
                 .format(self.term, self.leader_id, self.prev_log_idx,
                         self.prev_log_term, self.entries, self.leader_commit)
 
+class RequestVote:
+
+    # implementation of a RequestVote remote procedure call (RPC)
+    def __init__(self, candidate_term, candidate_id, last_log_idx, last_log_term):
+        self.candidate_term = candidate_term
+        self.candidate_id = candidate_id
+        # index of candidate's last log entry
+        self.last_log_idx = last_log_idx
+        # term of candidate's last log entry
+        self.last_log_term = last_log_term
+
+    def __str__(self):
+        return "\nRequestVote RPC:\n" \
+               "Candidate Term: {}\n" \
+               "Candidate ID: {}\n" \
+               "Last Log Index: {}\n" \
+               "Last Log Term: {}" \
+               .format(self.candidate_term, self.candidate_id,
+                        self.last_log_idx, self.last_log_term)
 
 if __name__ == '__main__':
     server = Server();
@@ -122,3 +141,5 @@ if __name__ == '__main__':
     print(sample_ae_rpc)
     print(server)
     server.process_append_entries_rpc(sample_ae_rpc)
+    sample_rv_rpc = RequestVote(1, 1, 1, 1)
+    print(sample_rv_rpc)
