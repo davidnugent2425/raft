@@ -42,7 +42,21 @@ class AppendEntries:
         self.entries = entries
         # the index of the highest log entry known (to the leader) to be committed
         self.leader_commit = leader_commit
+    
+    def __str__(self):
+        output = "AppendEntries RPC:\n" \
+                 "Term: {}\n" \
+                 "Leader ID:{}\n" \
+                 "Previous Log Idx: {}\n" \
+                 "Previous Log Term: {}\n" \
+                 "Entries: {}\n" \
+                 "Highest Commit known to Leader: {}" \
+                 .format(self.term, self.leader_id, self.prev_log_idx,
+                          self.prev_log_term, self.entries, self.leader_commit)
+        return output
+
 
 if __name__ == '__main__':
     server = Server();
     append_entries = AppendEntries(1, 1, 1, 1, [], 1);
+    print(append_entries)
