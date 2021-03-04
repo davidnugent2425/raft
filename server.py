@@ -89,8 +89,52 @@ class Server:
             self._convert_to_leader()
 
     def _convert_to_leader(self):
-        #TODO
+        self.status = LEADER
+        self.send_heartbeats()
+
+
+    def process_received_command(self, cmd):
+        if self.status != LEADER:
+            return self.forward_received_command(cmd)
+        new_log = [self.current_term, cmd]
+        self.log.append(new_log)
+        self.distribute_append_entries_rpcs(new_log)
+        self.execute(cmd)
+        return True
+    
+    def distribute_append_entries_rpcs(self, new_log):
+        #TODO send relevant amount of logs to each server
+        last_log_index = len(self.log)-1
+        for i in range(total_num_servers):
+            if i == self.server_id: continue
+            logs_to_send = self.log[-1]
+            dest_serv_next_index = self.next_index[i]
+            if last_log_index >= dest_serv_next_index:
+                logs_to_send = self.log[dest_serv_next_index:]
+            success = send_append_entries_rpc(i, logs_to_send)
+            if success:
+                self.next_index[i] = last_log_index + 1
+        #TODO if all AppendEntries successful, update match_index
+        #TODO if AppendEntries fails because of log inconsistency:
+        #     decrement next_index and retry
+        #TODO if majority of match_index >= N, and N is from current term,
+        #     commit_index = N
+        return True
+
+    def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
+        #TODO send an AppendEntries RPC to a server
         return None
+    
+    def forward_received_command(self, cmd):
+        #TODO forward received command to the leader for distribution
+        return None
+
+
+    def send_heartbeats(self):
+        #TODO send empty AppendEntries RPC to each server to avoid timeous
+        # during idle times
+        return None
+        
 
     def process_append_entries_rpc(self, rpc):
         
@@ -137,8 +181,6 @@ class Server:
             self.last_applied += 1
             self.execute(self.log[self.last_applied][1])
         
-
-
         return rpc.term, True
 
     
