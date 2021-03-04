@@ -1,12 +1,21 @@
 # implementation of the raft algorithm from the paper:
 # https://raft.github.io/raft.pdf
 
+import asyncio
+
+LEADER = 1
+CANDIDATE = 2
+FOLLOWER = 3
+
 class Server:
 
-    def __init__(self):
+    def __init__(self, server_id):
 
         # Variables used by all machines:
-
+        
+        self.server_id = server_id
+        # leader (1), candidate (2) or follower (3)
+        self.status = 0
         # latest term server has seen
         self.current_term = 0
         # candidate_id that received vote in current term
@@ -21,6 +30,9 @@ class Server:
         self.commit_index = 0
         # index of highest log entry that has been received
         self.last_applied = 0
+        self._timeout = 0
+        # task for handling timer
+        self._timer_task = None
         
         # Variables used when the machine is a Leader:
         # (all re-initialized after each election)
@@ -30,6 +42,28 @@ class Server:
         # contains the indexes of the highest log entry know to be replicated
         # on each server
         self.match_index = []
+
+        self._reset_timer()
+
+
+    def _reset_timer(self):
+        if self._timer_task is not None: self._timer_task.cancel()
+        self._timeout = 2
+        self._timer_task = asyncio.ensure_future(self._timer_job())
+
+
+    async def _timer_job(self):
+        await asyncio.sleep(self._timeout)
+        # if we have not voted for another candidate, convert into a candidate
+        if self.voted_for == None:
+            self._convert_to_candidate()
+        else: self._reset_timer()
+
+
+    def _convert_to_candidate(self):
+        self.current_term += 1
+        self.voted_for = self.server_id
+        self.status = CANDIDATE
 
 
     def process_append_entries_rpc(self, rpc):
@@ -69,16 +103,40 @@ class Server:
         if rpc.leader_commit > self.commit_index:
             self.commit_index = min(rpc.leader_commit, len(self.log)-1)
         
+        # if we have not applied all of the commands we know to be committed,
+        # apply them now
+        while self.commit_index > self.last_applied:
+            self.last_applied += 1
+            self.execute(self.log[self.last_applied][1])
+        
+        if rpc.term > self.current_term: self._convert_to_follower(rpc.term)
+
         return rpc.term, True
 
+    
+    def _convert_to_follower(self, new_term):
+        self.current_term = new_term
+        self.status = FOLLOW
+
+
+    def execute(self, command):
+        # for now just print the command from the logs
+        print(command)
+
+
     def process_request_vote_rpc(self, rpc):
-        if rpc.candidate_term < self.current_term: return False
+        if rpc.candidate_term < self.current_term:
+            return self.current_term, False
+        
         # if we have not yet issued a vote, or if this candidates logs
         # are at least as up to date as ours, vote for this candidate
         if self.voted_for == None or rpc.last_log_idx >= (len(self.log)-1):
             self.voted_for = rpc.candidate_id
-            return True
-        return False
+            return rpc.candidate_term, True
+
+        if rpc.term > self.current_term: self._convert_to_follower(rpc.term)
+        
+        return rpc.candidate_term, False
 
 
 
@@ -145,8 +203,9 @@ class RequestVote:
                .format(self.candidate_term, self.candidate_id,
                         self.last_log_idx, self.last_log_term)
 
-if __name__ == '__main__':
-    server = Server();
+
+async def main():
+    server = Server(1);
     sample_ae_rpc = AppendEntries(1, 1, 1, 1, [], 1);
     print(sample_ae_rpc)
     print(server)
@@ -155,3 +214,7 @@ if __name__ == '__main__':
     print(sample_rv_rpc)
     server.process_request_vote_rpc(sample_rv_rpc)
     print(server)
+
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
