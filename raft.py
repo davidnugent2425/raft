@@ -2,6 +2,7 @@
 # https://raft.github.io/raft.pdf
 
 class Server:
+
     def __init__(self):
 
         # Variables used by all machines:
@@ -12,8 +13,11 @@ class Server:
         self.voted_for = None
         # log entries; each entry contains a command and the term when
         # the entry was received by the leader
+        # form of log entry: [term number, command]
         self.log = []
         # index of highest log entry known to be committed
+        # (log entries are committed when they are known to be replicated on 
+        #  a majority of the servers)
         self.commit_index = 0
         # index of highest log entry that has been received
         self.last_applied = 0
@@ -27,8 +31,50 @@ class Server:
         # on each server
         self.match_index = []
 
+
+    def process_append_entries_rpc(self, rpc):
+        
+        # case when we receive rpc from an old leader
+        if rpc.term < self.current_term: return False
+        # case when there is a gap between the logs we have and the logs
+        # we are receiving
+        curr_num_entries = len(self.log)
+        if curr_num_entries < rpc.prev_log_idx or \
+           self.log[prev_log_term][0] != rpc.prev_log_term:
+            return False
+      
+        # which index of rpc.entries we should start at when appending to our
+        # current log (will not be 0 if we have previously received some of the same        # entries)
+        start_idx = 0
+        # if the current log already contains entries after prev_log_idx
+        # we check that the common entries are the same, otherwise we remove
+        # our incorrect entry and all following entries
+        if curr_num_entries > rpc.prev_log_idx:
+            num_common_elems = curr_num_entries - prev_log_idx - 1
+            for i in range(0, num_common_elems):
+                log_idx = prev_log_idx+i+1
+                # if the term number of the corresponding entries not the same
+                # remove incorrect entry and all following entries
+                if self.log[log_idx][0] != rpc.entries[i][0]:
+                    self.log = self.log[:log_idx]
+                    start_idx = i
+                    break
+                start_idx = i
+
+        # add all new entries to our log
+        self.log.append(rpc.entries[start_idx:])
+
+        # ensure our highest committed index is either our leaders committed
+        # index or the highest index in our log
+        if rpc.leader_commit > self.commit_index:
+            self.commit_index = min(rpc.leader_commit, len(self.log)-1)
+        
+        return True
+
+
     def __str__(self):
-        return "Server:\n" \
+        return "\nServer:\n" \
+               "Term: {}\n" \
                "Voted for: {}\n" \
                "Last 5 log entries: {}\n" \
                "Highest log entry known committed: {}\n" \
@@ -41,6 +87,8 @@ class Server:
 
 
 class AppendEntries:
+    
+    # implementation of an AppendEntries remote procedure call (RPC)
     def __init__(self, term, leader_id, prev_log_idx,
             prev_log_term, entries, leader_commit):
         # term of the leader who is sending
@@ -57,7 +105,7 @@ class AppendEntries:
         self.leader_commit = leader_commit
     
     def __str__(self):
-        return "AppendEntries RPC:\n" \
+        return "\nAppendEntries RPC:\n" \
                "Term: {}\n" \
                 "Leader ID:{}\n" \
                 "Previous Log Idx: {}\n" \
@@ -70,6 +118,7 @@ class AppendEntries:
 
 if __name__ == '__main__':
     server = Server();
-    append_entries = AppendEntries(1, 1, 1, 1, [], 1);
-    print(append_entries)
+    sample_ae_rpc = AppendEntries(1, 1, 1, 1, [], 1);
+    print(sample_ae_rpc)
     print(server)
+    server.process_append_entries_rpc(sample_ae_rpc)
