@@ -40,6 +40,10 @@ class Server:
         # on each server
         self.match_index = []
 
+        # Variables used when the machine is a Candidate:
+        self.votes_received = 0
+        self.total_num_servers = 0
+
         self._reset_timer()
 
 
@@ -54,19 +58,45 @@ class Server:
         # if we have not voted for another candidate, convert into a candidate
         if self.voted_for == None:
             self._convert_to_candidate()
+        elif self.status == CANDIDATE:
+            # if election timer runs out: start new election
+            self._convert_to_candidate()
         else: self._reset_timer()
 
 
     def _convert_to_candidate(self):
-        self.current_term += 1
-        self.voted_for = self.server_id
-        self.status = CANDIDATE
+        # block not executed if election restarted after timeout
+        if self.status != CANDIDATE:
+            self.current_term += 1
+            self.voted_for = self.server_id
+            self.status = CANDIDATE
+        self._reset_timer()
+        self.send_request_votes()
+
+    def send_request_votes(self):
+        # TODO
+        return None
+
+
+    def process_receive_vote_response(self, response):
+        if self.status != CANDIDATE: return
+        # if the voter is at a higher term than us, become a follower
+        if response[0] > self.current_term: self._convert_to_follower(response[0])
+        # if the voter votes for us
+        elif response[1] == True: self.votes_received += 1
+        # if we've received votes from majority of servers: become leader
+        if self.votes_received > self.total_num_servers // 2:
+            self._convert_to_leader()
+
+    def _convert_to_leader(self):
 
 
     def process_append_entries_rpc(self, rpc):
         
         # case when we receive rpc from an old leader
         if rpc.term < self.current_term: return self.current_term, False
+        # when we receive rpc from a new leader
+        elif rpc.term > self.current_term: self._convert_to_follower(rpc.term)
         # case when there is a gap between the logs we have and the logs
         # we are receiving
         curr_num_entries = len(self.log)
@@ -106,7 +136,7 @@ class Server:
             self.last_applied += 1
             self.execute(self.log[self.last_applied][1])
         
-        if rpc.term > self.current_term: self._convert_to_follower(rpc.term)
+
 
         return rpc.term, True
 
