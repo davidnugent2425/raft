@@ -89,7 +89,8 @@ class Server:
             self._convert_to_leader()
 
     def _convert_to_leader(self):
-
+        #TODO
+        return None
 
     def process_append_entries_rpc(self, rpc):
         
@@ -143,7 +144,7 @@ class Server:
     
     def _convert_to_follower(self, new_term):
         self.current_term = new_term
-        self.status = FOLLOW
+        self.status = FOLLOWER
 
 
     def execute(self, command):
