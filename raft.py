@@ -27,6 +27,22 @@ class Server:
         # on each server
         self.match_index = []
 
+class AppendEntries:
+    def __init__(self, term, leader_id, prev_log_idx,
+            prev_log_term, entries, leader_commit):
+        # term of the leader who is sending
+        self.term = term
+        # ID of leader who is sending; included so followers can redirect clients
+        self.leader_id = leader_id
+        # index of log entry immediately preceding new ones
+        self.prev_log_idx = prev_log_idx
+        # term of log entry immediately preceding new ones
+        self.prev_log_term = prev_log_term
+        # list of log entries being sent (empty for heartbeat)
+        self.entries = entries
+        # the index of the highest log entry known (to the leader) to be committed
+        self.leader_commit = leader_commit
 
 if __name__ == '__main__':
     server = Server();
+    append_entries = AppendEntries(1, 1, 1, 1, [], 1);
