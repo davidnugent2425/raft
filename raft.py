@@ -71,6 +71,16 @@ class Server:
         
         return rpc.term, True
 
+    def process_request_vote_rpc(self, rpc):
+        if rpc.candidate_term < self.current_term: return False
+        # if we have not yet issued a vote, or if this candidates logs
+        # are at least as up to date as ours, vote for this candidate
+        if self.voted_for == None or rpc.last_log_idx >= (len(self.log)-1):
+            self.voted_for = rpc.candidate_id
+            return True
+        return False
+
+
 
     def __str__(self):
         return "\nServer:\n" \
@@ -143,3 +153,5 @@ if __name__ == '__main__':
     server.process_append_entries_rpc(sample_ae_rpc)
     sample_rv_rpc = RequestVote(1, 1, 1, 1)
     print(sample_rv_rpc)
+    server.process_request_vote_rpc(sample_rv_rpc)
+    print(server)
