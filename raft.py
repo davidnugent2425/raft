@@ -27,6 +27,19 @@ class Server:
         # on each server
         self.match_index = []
 
+    def __str__(self):
+        return "Server:\n" \
+               "Voted for: {}\n" \
+               "Last 5 log entries: {}\n" \
+               "Highest log entry known committed: {}\n" \
+               "Highest log entry received: {}\n" \
+               "Next log indexes for each Server: {}\n" \
+               "Highest log indexes replicated on each Server: {}\n" \
+                .format(self.current_term, self.voted_for, self.log,
+                        self.commit_index, self.last_applied,
+                        self.next_index, self.match_index)
+
+
 class AppendEntries:
     def __init__(self, term, leader_id, prev_log_idx,
             prev_log_term, entries, leader_commit):
@@ -44,19 +57,19 @@ class AppendEntries:
         self.leader_commit = leader_commit
     
     def __str__(self):
-        output = "AppendEntries RPC:\n" \
-                 "Term: {}\n" \
-                 "Leader ID:{}\n" \
-                 "Previous Log Idx: {}\n" \
-                 "Previous Log Term: {}\n" \
-                 "Entries: {}\n" \
-                 "Highest Commit known to Leader: {}" \
-                 .format(self.term, self.leader_id, self.prev_log_idx,
-                          self.prev_log_term, self.entries, self.leader_commit)
-        return output
+        return "AppendEntries RPC:\n" \
+               "Term: {}\n" \
+                "Leader ID:{}\n" \
+                "Previous Log Idx: {}\n" \
+                "Previous Log Term: {}\n" \
+                "Entries: {}\n" \
+                "Highest Commit known to Leader: {}" \
+                .format(self.term, self.leader_id, self.prev_log_idx,
+                        self.prev_log_term, self.entries, self.leader_commit)
 
 
 if __name__ == '__main__':
     server = Server();
     append_entries = AppendEntries(1, 1, 1, 1, [], 1);
     print(append_entries)
+    print(server)
