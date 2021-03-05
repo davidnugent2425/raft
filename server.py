@@ -16,7 +16,7 @@ APPEND_ENTRIES_RESPONSE = 4
 FORWARDED_CMD = 5
 
 BASE_PORT_NUM = 50000
-FOLLOWER_TIMEOUT = 2
+#TODOself.follower_timeout = 5
 
 
 labels = {LEADER: "Leader",
@@ -47,6 +47,8 @@ class Server:
         # index of highest log entry that has been received
         self.last_applied = -1
         self._timeout = 0
+        # scale the timeout of followers positively with the size of the network
+        self.follower_timeout = 2 + 0.06*total_num_servers
         # task for handling timer
         self._timer_task = None
         # used for testing system
@@ -72,9 +74,12 @@ class Server:
         self.loop = asyncio.get_event_loop()
 
         # set up socket for this server
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(('127.0.0.1', BASE_PORT_NUM+self.server_id))
-        self.sock.listen()
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.bind(('127.0.0.1', BASE_PORT_NUM+self.server_id))
+            self.sock.listen()
+        except:
+            print("Server {} unavailable".format(self.server_id))
 
         # process receiving connections from other servers
         #asyncio.ensure_future(self.receive_connection())
@@ -88,13 +93,17 @@ class Server:
             asyncio.ensure_future(self.establish_connection(i))
 
     
+    
     async def establish_connection(self, server_index):
-        connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        connection.connect(('127.0.0.1', BASE_PORT_NUM+server_index))
-        #TODO verbose
-        #print("{} {} connected to Server {}" \
-        #        .format(labels[self.status], self.server_id, server_index))
-        self.connections[server_index] = connection
+        try:
+            connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            connection.connect(('127.0.0.1', BASE_PORT_NUM+server_index))
+            #TODO verbose
+            #print("{} {} connected to Server {}" \
+            #        .format(labels[self.status], self.server_id, server_index))
+            self.connections[server_index] = connection
+        except: print("Server {} unable to connect to Server {}" \
+                        .format(self.server_id, server_index))
             
 
     def _reset_timer(self):
@@ -103,8 +112,8 @@ class Server:
         #print("{} {} is resetting timer" \
         #        .format(labels[self.status], self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
-        # timeout is between FOLLOWER_TIMEOUT and FOLLOWER_TIMEOUT+2
-        self._timeout = FOLLOWER_TIMEOUT + (random()*2)
+        # timeout is between self.follower_timeout and FOLLOWER_TIMEOUT+2
+        self._timeout = self.follower_timeout + (random()*2)
         # if we are the leader, we send out heartbeats when channel is idle
         # so our timeout must be earlier than the followers
         if self.status == LEADER: self._timeout = random() * 0.5
@@ -281,7 +290,8 @@ class Server:
             print("Vote received by {} {} from {}" \
                     .format(labels[self.status], self.server_id, response["from"]))
         # if we've received votes from majority of servers: become leader
-        print("Num votes for {} is {}".format(self.server_id, self.votes_received))
+        #TODO verbose
+        #print("Num votes for {} is {}".format(self.server_id, self.votes_received))
         if self.votes_received > self.num_available_servers() // 2:
             self._convert_to_leader()
 
