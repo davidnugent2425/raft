@@ -179,7 +179,7 @@ class Server:
                     .format(labels[self.status], self.server_id, responder_idx))
             # if the failure is due to mismatched logs, send more (older) logs
             self.next_index[responder_idx] -= 1
-            self.send_append_entries(responder_id,
+            self.send_append_entries_rpc(responder_id,
                     self.log[self.next_index[responder_id]:])
         else:
             print("{} {} received successful log response from {}" \
@@ -215,6 +215,9 @@ class Server:
                      "voted": voted,
                      "term": term}
         data = pickle.dumps(vote_dict)
+        if voted:
+            print("Vote from {} {} sent to {}" \
+                .format(labels[self.status], self.server_id, candidate_id))
         self.connections[candidate_id].send(data)
 
     def send_request_votes(self):
@@ -285,7 +288,7 @@ class Server:
                     "term": self.current_term,
                     "leader_id": self.server_id,
                     "prev_log_idx": prev_log_idx,
-                    "prev_log_term": self.log[prev_log_idx],
+                    "prev_log_term": self.log[prev_log_idx][0],
                     "entries": logs_to_send,
                     "leader_commit": self.commit_index}
         data = pickle.dumps(rpc_dict)
@@ -327,8 +330,10 @@ class Server:
         # we are receiving
         curr_num_entries = len(self.log)
         if rpc["prev_log_idx"] >= 0 and \
-           (curr_num_entries < rpc["prev_log_idx"] or \
+           (curr_num_entries-1 < rpc["prev_log_idx"] or \
            self.log[rpc["prev_log_idx"]][0] != rpc["prev_log_term"]):
+            print("Gap in logs for {} {}" \
+                    .format(labels[self.status], self.server_id))
             return rpc["term"], False
         
         # which index of rpc.entries we should start at when appending to our
@@ -354,7 +359,7 @@ class Server:
                     rpc["entries"][start_idx:], rpc["leader_id"]))
         
         # add all new entries to our log
-        self.log.append(rpc["entries"][start_idx:])
+        self.log += rpc["entries"][start_idx:]
 
         # ensure our highest committed index is either our leaders committed
         # index or the highest index in our log
@@ -363,8 +368,11 @@ class Server:
         
         # if we have not applied all of the commands we know to be committed,
         # apply them now
+        print(self)
         while self.commit_index > self.last_applied:
             self.last_applied += 1
+            print(self.log)
+            print(self.last_applied)
             self.execute(self.log[self.last_applied][1])
         
         return rpc["term"], True
@@ -394,7 +402,7 @@ class Server:
         if rpc["candidate_term"] < self.current_term:
             return self.current_term, False
         
-        # if we have not yet issued a vote, or if this candidates logs
+        # if we have not yet issued a vote, and if this candidates logs
         # are at least as up to date as ours, vote for this candidate
         if self.voted_for == None and rpc["last_log_idx"] >= (len(self.log)-1):
 
