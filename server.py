@@ -11,6 +11,7 @@ FOLLOWER = 3
 APPEND_ENTRIES = 1
 REQUEST_VOTE = 2
 VOTE = 3
+APPEND_ENTRIES_RESPONSE = 4
 
 class Server:
 
@@ -131,6 +132,11 @@ class Server:
                 elif rpc_dict["type"] == APPEND_ENTRIES:
                     term, success = self.process_append_entries_rpc(rpc_dict)
                     if success: self._reset_timer()
+                    self.send_append_entries_response(term, success, rpc_dict)
+                elif rpc_dict["type"] == APPEND_ENTRIES_RESPONSE:
+                    print("Leader {} Received response {} from {}" \
+                            .format(self.server_id, rpc_dict["success"],
+                                rpc_dict["responder_id"]))
                 else: print("unexpected internal message")
             else:
                 # if it's not an internal message, we will treat it as a command
@@ -184,6 +190,9 @@ class Server:
     def _convert_to_leader(self):
         print("Server {} is now the Leader".format(self.server_id))
         self.status = LEADER
+        # initialise the required next index for each server to be our
+        # required next index
+        self.next_index = [len(self.log)] * self.total_num_servers
         self.send_heartbeats()
 
 
@@ -197,8 +206,8 @@ class Server:
         return True
     
     def distribute_append_entries_rpcs(self, new_log):
-        #TODO send relevant amount of logs to each server
         last_log_index = len(self.log)-1
+        all_successful = True
         for i in range(self.total_num_servers):
             if i == self.server_id: continue
             logs_to_send = self.log[-1]
@@ -208,11 +217,22 @@ class Server:
             success = self.send_append_entries_rpc(i, logs_to_send)
             if success:
                 self.next_index[i] = last_log_index + 1
-        #TODO if all AppendEntries successful, update match_index
-        #TODO if AppendEntries fails because of log inconsistency:
-        #     decrement next_index and retry
+            else:
+                # if AppendEntries fails because of log inconsistency,
+                # decrement next_index and retry
+                self.next_index -= 1
+                all_successful = False
+        #TODO these checks should come following responses from the servers
+        # if all AppendEntries successful, update match_index
+        if all_successful:
+            self.match_index = [last_log_index] * self.total_num_servers
+        
         #TODO if majority of match_index >= N, and N is from current term,
         #     commit_index = N
+
+
+        #TODO if AppendEntries fails because of log inconsistency:
+        #     decrement next_index and retry
         return True
 
     def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
@@ -305,6 +325,14 @@ class Server:
             self.execute(self.log[self.last_applied][1])
         
         return rpc["term"], True
+
+    def send_append_entries_response(self, term, success, rpc_dict):
+        response = {"type": APPEND_ENTRIES_RESPONSE,
+                    "term": term,
+                    "responder_id": self.server_id,
+                    "success": success}
+        data = pickle.dumps(response)
+        self.connections[rpc_dict["leader_id"]].send(data)
 
     
     def _convert_to_follower(self, new_term):
