@@ -3,6 +3,7 @@ import socket
 from random import random
 import pickle
 import tools
+import numpy as np
 
 LEADER = 1
 CANDIDATE = 2
@@ -13,6 +14,14 @@ REQUEST_VOTE = 2
 VOTE = 3
 APPEND_ENTRIES_RESPONSE = 4
 
+BASE_PORT_NUM = 50000
+FOLLOWER_TIMEOUT = 2
+
+
+labels = {LEADER: "Leader",
+          CANDIDATE: "Candidate",
+          FOLLOWER: "Follower"}
+
 class Server:
 
     def __init__(self, server_id, total_num_servers):
@@ -21,7 +30,7 @@ class Server:
         
         self.server_id = server_id
         # leader (1), candidate (2) or follower (3)
-        self.status = 0
+        self.status = FOLLOWER
         # latest term server has seen
         self.current_term = 0
         # candidate_id that received vote in current term
@@ -33,9 +42,9 @@ class Server:
         # index of highest log entry known to be committed
         # (log entries are committed when they are known to be replicated on 
         #  a majority of the servers)
-        self.commit_index = 0
+        self.commit_index = -1
         # index of highest log entry that has been received
-        self.last_applied = 0
+        self.last_applied = -1
         self._timeout = 0
         # task for handling timer
         self._timer_task = None
@@ -60,7 +69,7 @@ class Server:
 
         # set up socket for this server
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(('127.0.0.1', 50000+self.server_id))
+        self.sock.bind(('127.0.0.1', BASE_PORT_NUM+self.server_id))
         self.sock.listen()
 
         # process receiving connections from other servers
@@ -77,17 +86,18 @@ class Server:
     
     async def establish_connection(self, server_index):
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        connection.connect(('127.0.0.1', 50000+server_index))
-        print("Server {} connected to Server {}" \
-                .format(self.server_id, server_index))
+        connection.connect(('127.0.0.1', BASE_PORT_NUM+server_index))
+        print("{} {} connected to Server {}" \
+                .format(labels[self.status], self.server_id, server_index))
         self.connections[server_index] = connection
             
 
     def _reset_timer(self):
-        print("Server {} is resetting timer".format(self.server_id))
+        print("{} {} is resetting timer" \
+                .format(labels[self.status], self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
-        # timeout is between 1.5-2.5 seconds
-        self._timeout = 5 + random()
+        # timeout is between FOLLOWER_TIMEOUT and FOLLOWER_TIMEOUT+2
+        self._timeout = FOLLOWER_TIMEOUT + (random()*2)
         # if we are the leader, we send out heartbeats when channel is idle
         # so our timeout must be earlier than the followers
         if self.status == LEADER: self._timeout = random() * 0.5
@@ -134,15 +144,14 @@ class Server:
                     if success: self._reset_timer()
                     self.send_append_entries_response(term, success, rpc_dict)
                 elif rpc_dict["type"] == APPEND_ENTRIES_RESPONSE:
-                    print("Leader {} Received response {} from {}" \
-                            .format(self.server_id, rpc_dict["success"],
-                                rpc_dict["responder_id"]))
+                    self.process_append_entries_response(rpc_dict)
                 else: print("unexpected internal message")
             else:
                 # if it's not an internal message, we will treat it as a command
                 # for our logs
                 cmd = message.decode('utf-8')
-                print("Server {} received command: {}".format(self.server_id, cmd))
+                print("{} {} received command: {}" \
+                        .format(labels[self.status], self.server_id, cmd))
                 self.process_received_command(message.decode('utf-8'))
 
     async def receive_connection(self):
@@ -152,6 +161,52 @@ class Server:
             self.loop.create_task(self.receive_msgs(server, addr))
             #except:
             #    print("what")
+
+
+    def process_append_entries_response(self, response_dict):
+        responder_idx = response_dict["responder_id"]
+        if response_dict["term"] > self.current_term:
+            print("{} {} received message from {} that other leader \
+                    has higher term {}" \
+                    .format(labels[self.status], self.server_id,
+                        responder_idx, response_dict["term"]))
+            self._convert_to_follower(response_dict["term"])
+        elif response_dict["was_heartbeat"]:
+            print("{} {} received heartbeat response from {}" \
+                    .format(labels[self.status], self.server_id, responder_idx))
+        elif response_dict["success"] == False:
+            print("{} {} received mismatched logs failure from {}" \
+                    .format(labels[self.status], self.server_id, responder_idx))
+            # if the failure is due to mismatched logs, send more (older) logs
+            self.next_index[responder_idx] -= 1
+            self.send_append_entries(responder_id,
+                    self.log[self.next_index[responder_id]:])
+        else:
+            print("{} {} received successful log response from {}" \
+                    .format(labels[self.status], self.server_id, responder_idx))
+            # if the entries were successfuly appended set the next 
+            # expected log for the responder to be our next expected log
+            self.next_index[responder_idx] = len(self.log)
+            new_match_idx = len(self.log)-1
+            self.match_index[responder_idx] = new_match_idx
+            self.check_if_new_commit_index(new_match_idx)
+            print(self)
+
+
+    def check_if_new_commit_index(self, new_match_idx):
+        if new_match_idx <= self.commit_index: return
+        # if there is a majority of match_index[i] >= new_match_idx, and
+        # log[new_match_idx].term == current_term, set commit_idx = new_match_idx
+        if self.log[new_match_idx][0] == self.current_term:
+            temp = np.array(self.match_index)
+            # to find the number of match_indexes with at leat the value of 
+            # new_match_idx:
+            num_greater_equal = sum(((temp-new_match_idx)>=0).astype(int))
+            # if this is a majority
+            if num_greater_equal > self.total_num_servers // 2:
+                self.commit_index = new_match_idx
+                print("New commit_index of {} {} is {}" \
+                        .format(labels[self.status], self.server_id, new_match_idx))
             
     
     def send_vote_msg(self, candidate_id, term, voted):
@@ -175,14 +230,15 @@ class Server:
 
 
     def process_receive_vote_response(self, response):
-        print("Vote received by {} from {}" \
-                .format(self.server_id, response["from"]))
         if self.status != CANDIDATE: return
         # if the voter is at a higher term than us, become a follower
         if response["term"] > self.current_term:
             self._convert_to_follower(response["term"])
         # if the voter votes for us
-        elif response["voted"] == True: self.votes_received += 1
+        elif response["voted"] == True:
+            self.votes_received += 1
+            print("Vote received by {} {} from {}" \
+                    .format(labels[self.status], self.server_id, response["from"]))
         # if we've received votes from majority of servers: become leader
         if self.votes_received > self.total_num_servers // 2:
             self._convert_to_leader()
@@ -201,8 +257,11 @@ class Server:
             return self.forward_received_command(cmd)
         new_log = [self.current_term, cmd]
         self.log.append(new_log)
+        self.next_index[self.server_id] += 1
+        self.match_index[self.server_id] = len(self.log)-1
         self.distribute_append_entries_rpcs(new_log)
         self.execute(cmd)
+        self.last_applied = self.match_index[self.server_id]
         return True
     
     def distribute_append_entries_rpcs(self, new_log):
@@ -214,26 +273,10 @@ class Server:
             dest_serv_next_index = self.next_index[i]
             if last_log_index >= dest_serv_next_index:
                 logs_to_send = self.log[dest_serv_next_index:]
-            success = self.send_append_entries_rpc(i, logs_to_send)
-            if success:
-                self.next_index[i] = last_log_index + 1
-            else:
-                # if AppendEntries fails because of log inconsistency,
-                # decrement next_index and retry
-                self.next_index -= 1
-                all_successful = False
-        #TODO these checks should come following responses from the servers
-        # if all AppendEntries successful, update match_index
-        if all_successful:
-            self.match_index = [last_log_index] * self.total_num_servers
-        
-        #TODO if majority of match_index >= N, and N is from current term,
-        #     commit_index = N
+            self.send_append_entries_rpc(i, logs_to_send)
 
-
-        #TODO if AppendEntries fails because of log inconsistency:
-        #     decrement next_index and retry
         return True
+
 
     def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
         #send an AppendEntries RPC to a server
@@ -276,8 +319,8 @@ class Server:
 
         # case when it is just a heartbeat message
         if len(rpc["entries"]) == 0: 
-            print("Server {} received heartbeat from Leader {}" \
-                    .format(self.server_id, rpc["leader_id"]))
+            print("{} {} received heartbeat from Leader {}" \
+                    .format(labels[self.status], self.server_id, rpc["leader_id"]))
             return self.current_term, True
 
         # case when there is a gap between the logs we have and the logs
@@ -306,9 +349,9 @@ class Server:
                     break
                 start_idx = i
 
-        print("Server {} received new logs: {} from Leader {}"\
-                .format(self.server_id, rpc["entries"][start_idx:]
-                    , rpc["leader_id"]))
+        print("{} {} received new logs: {} from Leader {}"\
+                .format(labels[self.status], self.server_id, 
+                    rpc["entries"][start_idx:], rpc["leader_id"]))
         
         # add all new entries to our log
         self.log.append(rpc["entries"][start_idx:])
@@ -329,6 +372,7 @@ class Server:
     def send_append_entries_response(self, term, success, rpc_dict):
         response = {"type": APPEND_ENTRIES_RESPONSE,
                     "term": term,
+                    "was_heartbeat": len(rpc_dict["entries"])==0,
                     "responder_id": self.server_id,
                     "success": success}
         data = pickle.dumps(response)
@@ -353,6 +397,7 @@ class Server:
         # if we have not yet issued a vote, or if this candidates logs
         # are at least as up to date as ours, vote for this candidate
         if self.voted_for == None and rpc["last_log_idx"] >= (len(self.log)-1):
+
             self.voted_for = rpc["candidate_id"]
             return rpc["candidate_term"], True
         
@@ -361,7 +406,7 @@ class Server:
 
 
     def __str__(self):
-        return "\nServer:\n" \
+        return "\n{}: {}\n" \
                "Term: {}\n" \
                "Voted for: {}\n" \
                "Last 5 log entries: {}\n" \
@@ -369,7 +414,8 @@ class Server:
                "Highest log entry received: {}\n" \
                "Next log indexes for each Server: {}\n" \
                "Highest log indexes replicated on each Server: {}\n" \
-                .format(self.current_term, self.voted_for, self.log,
+                .format(labels[self.status], self.server_id,
+                        self.current_term, self.voted_for, self.log,
                         self.commit_index, self.last_applied,
                         self.next_index, self.match_index)
 
