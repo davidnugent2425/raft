@@ -6,7 +6,7 @@ consensus algorithms such as the [Paxos](https://en.wikipedia.org/wiki/Paxos_(co
 this [paper](https://raft.github.io/raft.pdf) by Diego Ongaro.
 
 ## My Implementation
-I chose to simulate a network with different 'server' processes communicating with each other across ports.
+I chose to simulate a network with different 'server' processes communicating with each other across ports. The bulk of the code is in [server.py](./server.py)
 
 ## Running the Simulator
 1. Clone this repository
