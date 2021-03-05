@@ -172,6 +172,7 @@ class Server:
                     self.process_received_command(cmd)
                 else: self.forward_received_command(cmd)
 
+
     async def receive_connection(self):
         while True:
             server, addr = await self.loop.sock_accept(self.sock)
@@ -206,8 +207,7 @@ class Server:
             self.next_index[responder_idx] = len(self.log)
             new_match_idx = len(self.log)-1
             self.match_index[responder_idx] = new_match_idx
-            self.check_if_new_commit_index(new_match_idx)
-            
+            self.check_if_new_commit_index(new_match_idx)            
 
 
     def check_if_new_commit_index(self, new_match_idx):
@@ -251,6 +251,7 @@ class Server:
             if i == self.server_id: continue
             self.send_data(i, data)
 
+
     def send_data(self, dest_server_num, data):
         try:
             if dest_server_num in self.unreachable: return
@@ -263,6 +264,7 @@ class Server:
                     .format(labels[self.status], self.server_id, dest_server_num))
             if dest_server_num not in self.unreachable:
                 self.unreachable.append(dest_server_num)
+
 
     def num_available_servers(self):
         return self.total_num_servers - len(self.unreachable)
@@ -283,6 +285,7 @@ class Server:
         if self.votes_received > self.num_available_servers() // 2:
             self._convert_to_leader()
 
+
     def _convert_to_leader(self):
         print("Server {} is now the Leader".format(self.server_id))
         self.status = LEADER
@@ -301,7 +304,8 @@ class Server:
         self.execute(cmd)
         self.last_applied = self.match_index[self.server_id]
         return True
-    
+
+
     def distribute_append_entries_rpcs(self, new_log):
         last_log_index = len(self.log)-1
         all_successful = True
@@ -312,7 +316,6 @@ class Server:
             if last_log_index >= dest_serv_next_index:
                 logs_to_send = self.log[dest_serv_next_index:]
             self.send_append_entries_rpc(i, logs_to_send)
-
         return True
 
 
@@ -329,6 +332,7 @@ class Server:
         data = pickle.dumps(rpc_dict)
         self.send_data(dest_serv_id, data)
     
+
     def forward_received_command(self, cmd):
         print("{} {} is forwarding command" \
                 .format(labels[self.status], self.server_id))
@@ -353,6 +357,7 @@ class Server:
             if i == self.server_id: continue
             self.send_data(i, data)
         self._reset_timer()
+
 
     def process_append_entries_rpc(self, rpc):
 
@@ -459,7 +464,6 @@ class Server:
             return rpc["candidate_term"], True
         
         return rpc["candidate_term"], False
-
 
 
     def __str__(self):

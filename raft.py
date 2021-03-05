@@ -3,7 +3,6 @@
 
 import asyncio
 from server import Server
-#from remote_procedure_calls import AppendEntries, RequestVote
 
 async def main():
     servers = []
