@@ -74,32 +74,31 @@ class Server:
 
     
     async def establish_connection(self, server_index):
-        #try:
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connection.connect(('127.0.0.1', 50000+server_index))
         print("Server {} connected to Server {}" \
                 .format(self.server_id, server_index))
         self.connections[server_index] = connection
-        #except:
-        #    print("uh oh")
-        #    return
             
 
     def _reset_timer(self):
         print("Server {} is resetting timer".format(self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
         # timeout is between 1.5-2.5 seconds
-        self._timeout = 1.5 + random()
+        self._timeout = 5 + random()
+        # if we are the leader, we send out heartbeats when channel is idle
+        # so our timeout must be earlier than the followers
+        if self.status == LEADER: self._timeout = random() * 0.5
         self._timer_task = asyncio.ensure_future(self._timer_job())
 
 
     async def _timer_job(self):
         await asyncio.sleep(self._timeout)
-        # if we have not voted for another candidate, convert into a candidate
-        if self.voted_for == None:
-            self._convert_to_candidate()
-        elif self.status == CANDIDATE:
-            # if election timer runs out: start new election
+        if self.status == LEADER:
+            self.send_heartbeats()
+        # if we have not voted for another candidate, convert to candidate,
+        # if we are already a candidate, restart candidacy
+        elif self.voted_for == None or self.status == CANDIDATE:
             self._convert_to_candidate()
         else: self._reset_timer()
 
@@ -127,6 +126,9 @@ class Server:
                 self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
             elif rpc_dict["type"] == VOTE:
                 self.process_receive_vote_response(rpc_dict)
+            elif rpc_dict["type"] == APPEND_ENTRIES:
+                term, success = self.process_append_entries_rpc(rpc_dict)
+                if success: self._reset_timer()
 
     async def receive_connection(self):
         while True:
@@ -207,13 +209,14 @@ class Server:
     def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
         #send an AppendEntries RPC to a server
         prev_log_idx = self.next_index[dest_serv_id]-1
-        rpc_dict = {"term": self.current_term,
+        rpc_dict = {"type": APPEND_ENTRIES,
+                    "term": self.current_term,
                     "leader_id": self.server_id,
                     "prev_log_idx": prev_log_idx,
                     "prev_log_term": self.log[prev_log_idx],
                     "entries": logs_to_send,
                     "leader_commit": self.commit_index}
-        data = pickle.loads(rpc_dict)
+        data = pickle.dumps(rpc_dict)
         self.connections[i].send(data)
         return None
     
@@ -223,23 +226,37 @@ class Server:
 
 
     def send_heartbeats(self):
-        #TODO send empty AppendEntries RPC to each server to avoid timeous
+        # send empty AppendEntries RPC to each server to avoid timeouts
         # during idle times
-        return None
-        
+        rpc_dict = {"type": APPEND_ENTRIES,
+                    "term": self.current_term,
+                    "leader_id": self.server_id,
+                    "entries": [],
+                    "leader_commit": self.commit_index}
+        data = pickle.dumps(rpc_dict)
+        for connection in self.connections.values():
+            connection.send(data)
+        self._reset_timer()
 
     def process_append_entries_rpc(self, rpc):
-        
+
         # case when we receive rpc from an old leader
-        if rpc.term < self.current_term: return self.current_term, False
+        if rpc["term"] < self.current_term: return self.current_term, False
         # when we receive rpc from a new leader
-        elif rpc.term > self.current_term: self._convert_to_follower(rpc.term)
+        elif rpc["term"] > self.current_term:
+            self._convert_to_follower(rpc["term"])
+
+        # case when it is just a heartbeat message
+        if len(rpc["entries"]) == 0: 
+            print("Server {} received heartbeat from Leader".format(self.server_id))
+            return self.current_term, True
+
         # case when there is a gap between the logs we have and the logs
         # we are receiving
         curr_num_entries = len(self.log)
-        if curr_num_entries < rpc.prev_log_idx or \
-           self.log[prev_log_term][0] != rpc.prev_log_term:
-            return rpc.term, False
+        if curr_num_entries < rpc["prev_log_idx"] or \
+           self.log[rpc["prev_log_idx"]][0] != rpc["prev_log_term"]:
+            return rpc["term"], False
       
         # which index of rpc.entries we should start at when appending to our
         # current log (will not be 0 if we have previously received some of the same        # entries)
@@ -247,25 +264,25 @@ class Server:
         # if the current log already contains entries after prev_log_idx
         # we check that the common entries are the same, otherwise we remove
         # our incorrect entry and all following entries
-        if curr_num_entries > rpc.prev_log_idx:
-            num_common_elems = curr_num_entries - prev_log_idx - 1
+        if curr_num_entries > rpc["prev_log_idx"]:
+            num_common_elems = curr_num_entries - rpc["prev_log_idx"] - 1
             for i in range(0, num_common_elems):
-                log_idx = prev_log_idx+i+1
+                log_idx = rpc["prev_log_idx"]+i+1
                 # if the term number of the corresponding entries not the same
                 # remove incorrect entry and all following entries
-                if self.log[log_idx][0] != rpc.entries[i][0]:
+                if self.log[log_idx][0] != rpc["entries"][i][0]:
                     self.log = self.log[:log_idx]
                     start_idx = i
                     break
                 start_idx = i
 
         # add all new entries to our log
-        self.log.append(rpc.entries[start_idx:])
+        self.log.append(rpc["entries"][start_idx:])
 
         # ensure our highest committed index is either our leaders committed
         # index or the highest index in our log
-        if rpc.leader_commit > self.commit_index:
-            self.commit_index = min(rpc.leader_commit, len(self.log)-1)
+        if rpc["leader_commit"] > self.commit_index:
+            self.commit_index = min(rpc["leader_commit"], len(self.log)-1)
         
         # if we have not applied all of the commands we know to be committed,
         # apply them now
@@ -273,12 +290,13 @@ class Server:
             self.last_applied += 1
             self.execute(self.log[self.last_applied][1])
         
-        return rpc.term, True
+        return rpc["term"], True
 
     
     def _convert_to_follower(self, new_term):
         self.current_term = new_term
         self.status = FOLLOWER
+        self.voted_for = None
 
 
     def execute(self, command):
@@ -292,11 +310,9 @@ class Server:
         
         # if we have not yet issued a vote, or if this candidates logs
         # are at least as up to date as ours, vote for this candidate
-        if self.voted_for == None or rpc["last_log_idx"] >= (len(self.log)-1):
+        if self.voted_for == None and rpc["last_log_idx"] >= (len(self.log)-1):
             self.voted_for = rpc["candidate_id"]
             return rpc["candidate_term"], True
-
-        if rpc["term"] > self.current_term: self._convert_to_follower(rpc["term"])
         
         return rpc["candidate_term"], False
 
