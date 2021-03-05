@@ -26,5 +26,12 @@ def write():
         print("Unable to send to port {}".format(dest_port))
 
 if __name__ == '__main__':
+    print("\nEnter commands in the form: <command> <server-number> <msg(optional)>\n"\
+          "Command Options:\n" \
+          "KILL: e.g. KILL 3\n" \
+          "      will kill Server 3\n" \
+          "cmd: e.g. cmd 3 \"mkdir sample\"\n" \
+          "     will send the command mkdir sample to server 3\n" \
+          "     (the \" marks are required)")
     while(True):
         write()

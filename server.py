@@ -13,6 +13,7 @@ APPEND_ENTRIES = 1
 REQUEST_VOTE = 2
 VOTE = 3
 APPEND_ENTRIES_RESPONSE = 4
+FORWARDED_CMD = 5
 
 BASE_PORT_NUM = 50000
 FOLLOWER_TIMEOUT = 2
@@ -90,8 +91,9 @@ class Server:
     async def establish_connection(self, server_index):
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connection.connect(('127.0.0.1', BASE_PORT_NUM+server_index))
-        print("{} {} connected to Server {}" \
-                .format(labels[self.status], self.server_id, server_index))
+        #TODO verbose
+        #print("{} {} connected to Server {}" \
+        #        .format(labels[self.status], self.server_id, server_index))
         self.connections[server_index] = connection
             
 
@@ -140,8 +142,9 @@ class Server:
             if(tools.is_pickle_stream(message)):
                 rpc_dict = pickle.loads(message)
                 if rpc_dict["type"] == REQUEST_VOTE:
-                    print("Request Vote from {} received by {}" \
-                            .format(rpc_dict["candidate_id"], self.server_id))
+                    #TODO verbose
+                    #print("Request Vote from {} received by {}" \
+                    #        .format(rpc_dict["candidate_id"], self.server_id))
                     term, voted = self.process_request_vote_rpc(rpc_dict)
                     self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
                 elif rpc_dict["type"] == VOTE:
@@ -152,6 +155,9 @@ class Server:
                     self.send_append_entries_response(term, success, rpc_dict)
                 elif rpc_dict["type"] == APPEND_ENTRIES_RESPONSE:
                     self.process_append_entries_response(rpc_dict)
+                elif rpc_dict["type"] == FORWARDED_CMD:
+                    if self.status == LEADER:
+                        self.process_received_command(rpc_dict["cmd"])
                 else: print("unexpected internal message")
             else:
                 # if it's not an internal message, we will treat it as a command
@@ -162,15 +168,14 @@ class Server:
                     continue
                 print("{} {} received command: {}" \
                         .format(labels[self.status], self.server_id, cmd))
-                self.process_received_command(message.decode('utf-8'))
+                if self.status == LEADER:
+                    self.process_received_command(cmd)
+                else: self.forward_received_command(cmd)
 
     async def receive_connection(self):
         while True:
-            #try:
             server, addr = await self.loop.sock_accept(self.sock)
             self.loop.create_task(self.receive_msgs(server, addr))
-            #except:
-            #    print("what")
 
 
     def process_append_entries_response(self, response_dict):
@@ -227,10 +232,12 @@ class Server:
                      "voted": voted,
                      "term": term}
         data = pickle.dumps(vote_dict)
-        if voted:
-            print("Vote from {} {} sent to {}" \
-                .format(labels[self.status], self.server_id, candidate_id))
+        #TODO verbose
+        #if voted:
+        #    print("Vote from {} {} sent to {}" \
+        #        .format(labels[self.status], self.server_id, candidate_id))
         self.send_data(candidate_id, data)
+
 
     def send_request_votes(self):
         log_term = 0 if len(self.log) == 0 else self.log[self.last_applied][0]
@@ -260,7 +267,6 @@ class Server:
     def num_available_servers(self):
         return self.total_num_servers - len(self.unreachable)
 
-    #TODO forwarding of messages
 
     def process_receive_vote_response(self, response):
         if self.status != CANDIDATE: return
@@ -287,8 +293,6 @@ class Server:
 
 
     def process_received_command(self, cmd):
-        if self.status != LEADER:
-            return self.forward_received_command(cmd)
         new_log = [self.current_term, cmd]
         self.log.append(new_log)
         self.next_index[self.server_id] += 1
@@ -326,8 +330,14 @@ class Server:
         self.send_data(dest_serv_id, data)
     
     def forward_received_command(self, cmd):
-        #TODO forward received command to the leader for distribution
-        return None
+        print("{} {} is forwarding command" \
+                .format(labels[self.status], self.server_id))
+        forwarded_dict = {"type": FORWARDED_CMD,
+                          "cmd": cmd}
+        data = pickle.dumps(forwarded_dict)
+        for i in range(self.total_num_servers):
+            if i == self.server_id: continue
+            self.send_data(i, data)
 
 
     def send_heartbeats(self):
@@ -410,8 +420,8 @@ class Server:
         # apply them now
         while self.commit_index > self.last_applied:
             self.last_applied += 1
-            print(self.log)
-            print(self.last_applied)
+            print("{} {} current log: {}". \
+                    format(labels[self.status], self.server_id, self.log))
             self.execute(self.log[self.last_applied][1])
 
 
