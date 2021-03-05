@@ -1,4 +1,5 @@
 import asyncio
+import socket
 
 LEADER = 1
 CANDIDATE = 2
@@ -6,7 +7,7 @@ FOLLOWER = 3
 
 class Server:
 
-    def __init__(self, server_id):
+    def __init__(self, server_id, total_num_servers):
 
         # Variables used by all machines:
         
@@ -42,10 +43,33 @@ class Server:
 
         # Variables used when the machine is a Candidate:
         self.votes_received = 0
-        self.total_num_servers = 0
+        self.total_num_servers = total_num_servers
 
+        # start timer which will be used for follower and candidate timeouts
         self._reset_timer()
 
+        # set up socket for this server
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind(('127.0.0.1', 50000+self.server_id))
+        self.sock.listen()
+        
+        # connections by socket to other servers in the network
+        self.connections = {}
+        for i in range(self.total_num_servers):
+            if i == self.server_id: continue
+            asyncio.ensure_future(self.establish_connection(i))
+
+    
+    async def establish_connection(self, server_index):
+        try:
+            connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            connection.connect(('127.0.0.1', 50000+server_index))
+            print("Server {} connected to Server {}" \
+                    .format(self.server_id, server_index))
+            self.connections[server_index] = connection
+        except:
+            return
+            
 
     def _reset_timer(self):
         if self._timer_task is not None: self._timer_task.cancel()
@@ -73,9 +97,17 @@ class Server:
         self._reset_timer()
         self.send_request_votes()
 
+
     def send_request_votes(self):
         # TODO
         return None
+        rpc_dict = {"candidate_term": self.current_term,
+                    "candidate_id": self.server_id,
+                    "last_log_idx": self.last_applied,
+                    "last_log_term": self.log[self.last_applied][0]}
+        data = pickle.loads(rpc_dict)
+        for connection in self.connections:
+            connection.send(data)
 
 
     def process_receive_vote_response(self, response):
@@ -122,7 +154,16 @@ class Server:
         return True
 
     def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
-        #TODO send an AppendEntries RPC to a server
+        #send an AppendEntries RPC to a server
+        prev_log_idx = self.next_index[dest_serv_id]-1
+        rpc_dict = {"term": self.current_term,
+                    "leader_id": self.server_id,
+                    "prev_log_idx": prev_log_idx,
+                    "prev_log_term": self.log[prev_log_idx],
+                    "entries": logs_to_send,
+                    "leader_commit": self.commit_index}
+        data = pickle.loads(rpc_dict)
+        connections[i].send(data)
         return None
     
     def forward_received_command(self, cmd):
