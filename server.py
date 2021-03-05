@@ -48,6 +48,9 @@ class Server:
         self._timeout = 0
         # task for handling timer
         self._timer_task = None
+        # used for testing system
+        self.dead = False
+        self.unreachable = []
         
         # Variables used when the machine is a Leader:
         # (all re-initialized after each election)
@@ -93,8 +96,10 @@ class Server:
             
 
     def _reset_timer(self):
-        print("{} {} is resetting timer" \
-                .format(labels[self.status], self.server_id))
+        if self.dead: return
+        #TODO logging
+        #print("{} {} is resetting timer" \
+        #        .format(labels[self.status], self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
         # timeout is between FOLLOWER_TIMEOUT and FOLLOWER_TIMEOUT+2
         self._timeout = FOLLOWER_TIMEOUT + (random()*2)
@@ -128,8 +133,10 @@ class Server:
 
 
     async def receive_msgs(self, server, addr):
-        while True:
+        while not self.dead:
             message = await self.loop.sock_recv(server, 1024)
+            if message == b'': continue # skip if empty
+            # if it can be parsed by pickle, it's an internal message
             if(tools.is_pickle_stream(message)):
                 rpc_dict = pickle.loads(message)
                 if rpc_dict["type"] == REQUEST_VOTE:
@@ -150,6 +157,9 @@ class Server:
                 # if it's not an internal message, we will treat it as a command
                 # for our logs
                 cmd = message.decode('utf-8')
+                if cmd == 'KILL': 
+                    self.dead = True
+                    continue
                 print("{} {} received command: {}" \
                         .format(labels[self.status], self.server_id, cmd))
                 self.process_received_command(message.decode('utf-8'))
@@ -172,8 +182,10 @@ class Server:
                         responder_idx, response_dict["term"]))
             self._convert_to_follower(response_dict["term"])
         elif response_dict["was_heartbeat"]:
-            print("{} {} received heartbeat response from {}" \
-                    .format(labels[self.status], self.server_id, responder_idx))
+            #TODO logging
+            #print("{} {} received heartbeat response from {}" \
+            #        .format(labels[self.status], self.server_id, responder_idx))
+            return
         elif response_dict["success"] == False:
             print("{} {} received mismatched logs failure from {}" \
                     .format(labels[self.status], self.server_id, responder_idx))
@@ -190,7 +202,7 @@ class Server:
             new_match_idx = len(self.log)-1
             self.match_index[responder_idx] = new_match_idx
             self.check_if_new_commit_index(new_match_idx)
-            print(self)
+            
 
 
     def check_if_new_commit_index(self, new_match_idx):
@@ -203,7 +215,7 @@ class Server:
             # new_match_idx:
             num_greater_equal = sum(((temp-new_match_idx)>=0).astype(int))
             # if this is a majority
-            if num_greater_equal > self.total_num_servers // 2:
+            if num_greater_equal > self.num_available_servers() // 2:
                 self.commit_index = new_match_idx
                 print("New commit_index of {} {} is {}" \
                         .format(labels[self.status], self.server_id, new_match_idx))
@@ -218,7 +230,7 @@ class Server:
         if voted:
             print("Vote from {} {} sent to {}" \
                 .format(labels[self.status], self.server_id, candidate_id))
-        self.connections[candidate_id].send(data)
+        self.send_data(candidate_id, data)
 
     def send_request_votes(self):
         log_term = 0 if len(self.log) == 0 else self.log[self.last_applied][0]
@@ -228,9 +240,27 @@ class Server:
                     "last_log_idx": self.last_applied,
                     "last_log_term": log_term}
         data = pickle.dumps(rpc_dict)
-        for connection in self.connections.values():
-            connection.send(data)
+        for i in range(self.total_num_servers):
+            if i == self.server_id: continue
+            self.send_data(i, data)
 
+    def send_data(self, dest_server_num, data):
+        try:
+            if dest_server_num in self.unreachable: return
+            self.connections[dest_server_num].send(data)
+            #TODO maybe allow servers to re-enter network
+            #if dest_server_num in self.unreachable:
+            #    self.unreachable.remove(dest_server_num)
+        except:
+            print("{} {} unable to reach {}" \
+                    .format(labels[self.status], self.server_id, dest_server_num))
+            if dest_server_num not in self.unreachable:
+                self.unreachable.append(dest_server_num)
+
+    def num_available_servers(self):
+        return self.total_num_servers - len(self.unreachable)
+
+    #TODO forwarding of messages
 
     def process_receive_vote_response(self, response):
         if self.status != CANDIDATE: return
@@ -243,7 +273,8 @@ class Server:
             print("Vote received by {} {} from {}" \
                     .format(labels[self.status], self.server_id, response["from"]))
         # if we've received votes from majority of servers: become leader
-        if self.votes_received > self.total_num_servers // 2:
+        print("Num votes for {} is {}".format(self.server_id, self.votes_received))
+        if self.votes_received > self.num_available_servers() // 2:
             self._convert_to_leader()
 
     def _convert_to_leader(self):
@@ -292,7 +323,7 @@ class Server:
                     "entries": logs_to_send,
                     "leader_commit": self.commit_index}
         data = pickle.dumps(rpc_dict)
-        self.connections[dest_serv_id].send(data)
+        self.send_data(dest_serv_id, data)
     
     def forward_received_command(self, cmd):
         #TODO forward received command to the leader for distribution
@@ -308,8 +339,9 @@ class Server:
                     "entries": [],
                     "leader_commit": self.commit_index}
         data = pickle.dumps(rpc_dict)
-        for connection in self.connections.values():
-            connection.send(data)
+        for i in range(self.total_num_servers):
+            if i == self.server_id: continue
+            self.send_data(i, data)
         self._reset_timer()
 
     def process_append_entries_rpc(self, rpc):
@@ -322,8 +354,10 @@ class Server:
 
         # case when it is just a heartbeat message
         if len(rpc["entries"]) == 0: 
-            print("{} {} received heartbeat from Leader {}" \
-                    .format(labels[self.status], self.server_id, rpc["leader_id"]))
+            #TODO logging
+            #print("{} {} received heartbeat from {}" \
+            #        .format(labels[self.status], self.server_id, rpc["leader_id"]))
+            self.execute_committed_commands(rpc)
             return self.current_term, True
 
         # case when there is a gap between the logs we have and the logs
@@ -361,6 +395,12 @@ class Server:
         # add all new entries to our log
         self.log += rpc["entries"][start_idx:]
 
+        self.execute_committed_commands(rpc)
+        
+        return rpc["term"], True
+
+
+    def execute_committed_commands(self, rpc):
         # ensure our highest committed index is either our leaders committed
         # index or the highest index in our log
         if rpc["leader_commit"] > self.commit_index:
@@ -368,14 +408,12 @@ class Server:
         
         # if we have not applied all of the commands we know to be committed,
         # apply them now
-        print(self)
         while self.commit_index > self.last_applied:
             self.last_applied += 1
             print(self.log)
             print(self.last_applied)
             self.execute(self.log[self.last_applied][1])
-        
-        return rpc["term"], True
+
 
     def send_append_entries_response(self, term, success, rpc_dict):
         response = {"type": APPEND_ENTRIES_RESPONSE,
@@ -384,7 +422,7 @@ class Server:
                     "responder_id": self.server_id,
                     "success": success}
         data = pickle.dumps(response)
-        self.connections[rpc_dict["leader_id"]].send(data)
+        self.send_data(rpc_dict["leader_id"], data)
 
     
     def _convert_to_follower(self, new_term):
@@ -395,7 +433,8 @@ class Server:
 
     def execute(self, command):
         # for now just print the command from the logs
-        print(command)
+        print("{} {} Executing command: {}" \
+                .format(labels[self.status], self.server_id, command))
 
 
     def process_request_vote_rpc(self, rpc):

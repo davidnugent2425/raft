@@ -7,8 +7,9 @@ from remote_procedure_calls import AppendEntries, RequestVote
 
 async def main():
     servers = []
-    for i in range(3):
-        servers.append(Server(i, 3))
+    num_servers = 5
+    for i in range(num_servers):
+        servers.append(Server(i, num_servers))
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
