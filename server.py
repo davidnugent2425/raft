@@ -2,6 +2,7 @@ import asyncio
 import socket
 from random import random
 import pickle
+import tools
 
 LEADER = 1
 CANDIDATE = 2
@@ -42,10 +43,10 @@ class Server:
         # (all re-initialized after each election)
         
         # contains the indexes of the next log entry to be sent to each server
-        self.next_index = []
+        self.next_index = [0]*total_num_servers
         # contains the indexes of the highest log entry know to be replicated
         # on each server
-        self.match_index = []
+        self.match_index = [-1]*total_num_servers
 
         # Variables used when the machine is a Candidate:
         self.votes_received = 0
@@ -118,17 +119,25 @@ class Server:
     async def receive_msgs(self, server, addr):
         while True:
             message = await self.loop.sock_recv(server, 1024)
-            rpc_dict = pickle.loads(message)
-            if rpc_dict["type"] == REQUEST_VOTE:
-                print("Request Vote from {} received by {}" \
-                        .format(rpc_dict["candidate_id"], self.server_id))
-                term, voted = self.process_request_vote_rpc(rpc_dict)
-                self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
-            elif rpc_dict["type"] == VOTE:
-                self.process_receive_vote_response(rpc_dict)
-            elif rpc_dict["type"] == APPEND_ENTRIES:
-                term, success = self.process_append_entries_rpc(rpc_dict)
-                if success: self._reset_timer()
+            if(tools.is_pickle_stream(message)):
+                rpc_dict = pickle.loads(message)
+                if rpc_dict["type"] == REQUEST_VOTE:
+                    print("Request Vote from {} received by {}" \
+                            .format(rpc_dict["candidate_id"], self.server_id))
+                    term, voted = self.process_request_vote_rpc(rpc_dict)
+                    self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
+                elif rpc_dict["type"] == VOTE:
+                    self.process_receive_vote_response(rpc_dict)
+                elif rpc_dict["type"] == APPEND_ENTRIES:
+                    term, success = self.process_append_entries_rpc(rpc_dict)
+                    if success: self._reset_timer()
+                else: print("unexpected internal message")
+            else:
+                # if it's not an internal message, we will treat it as a command
+                # for our logs
+                cmd = message.decode('utf-8')
+                print("Server {} received command: {}".format(self.server_id, cmd))
+                self.process_received_command(message.decode('utf-8'))
 
     async def receive_connection(self):
         while True:
@@ -190,13 +199,13 @@ class Server:
     def distribute_append_entries_rpcs(self, new_log):
         #TODO send relevant amount of logs to each server
         last_log_index = len(self.log)-1
-        for i in range(total_num_servers):
+        for i in range(self.total_num_servers):
             if i == self.server_id: continue
             logs_to_send = self.log[-1]
             dest_serv_next_index = self.next_index[i]
             if last_log_index >= dest_serv_next_index:
                 logs_to_send = self.log[dest_serv_next_index:]
-            success = send_append_entries_rpc(i, logs_to_send)
+            success = self.send_append_entries_rpc(i, logs_to_send)
             if success:
                 self.next_index[i] = last_log_index + 1
         #TODO if all AppendEntries successful, update match_index
@@ -217,8 +226,7 @@ class Server:
                     "entries": logs_to_send,
                     "leader_commit": self.commit_index}
         data = pickle.dumps(rpc_dict)
-        self.connections[i].send(data)
-        return None
+        self.connections[dest_serv_id].send(data)
     
     def forward_received_command(self, cmd):
         #TODO forward received command to the leader for distribution
@@ -248,16 +256,18 @@ class Server:
 
         # case when it is just a heartbeat message
         if len(rpc["entries"]) == 0: 
-            print("Server {} received heartbeat from Leader".format(self.server_id))
+            print("Server {} received heartbeat from Leader {}" \
+                    .format(self.server_id, rpc["leader_id"]))
             return self.current_term, True
 
         # case when there is a gap between the logs we have and the logs
         # we are receiving
         curr_num_entries = len(self.log)
-        if curr_num_entries < rpc["prev_log_idx"] or \
-           self.log[rpc["prev_log_idx"]][0] != rpc["prev_log_term"]:
+        if rpc["prev_log_idx"] >= 0 and \
+           (curr_num_entries < rpc["prev_log_idx"] or \
+           self.log[rpc["prev_log_idx"]][0] != rpc["prev_log_term"]):
             return rpc["term"], False
-      
+        
         # which index of rpc.entries we should start at when appending to our
         # current log (will not be 0 if we have previously received some of the same        # entries)
         start_idx = 0
@@ -276,6 +286,10 @@ class Server:
                     break
                 start_idx = i
 
+        print("Server {} received new logs: {} from Leader {}"\
+                .format(self.server_id, rpc["entries"][start_idx:]
+                    , rpc["leader_id"]))
+        
         # add all new entries to our log
         self.log.append(rpc["entries"][start_idx:])
 
