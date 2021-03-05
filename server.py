@@ -16,7 +16,6 @@ APPEND_ENTRIES_RESPONSE = 4
 FORWARDED_CMD = 5
 
 BASE_PORT_NUM = 50000
-#TODOself.follower_timeout = 5
 
 
 labels = {LEADER: "Leader",
@@ -25,11 +24,12 @@ labels = {LEADER: "Leader",
 
 class Server:
 
-    def __init__(self, server_id, total_num_servers):
+    def __init__(self, server_id, total_num_servers, verbose):
 
         # Variables used by all machines:
         
         self.server_id = server_id
+        self.verbose = verbose
         # leader (1), candidate (2) or follower (3)
         self.status = FOLLOWER
         # latest term server has seen
@@ -82,8 +82,6 @@ class Server:
             print("Server {} unavailable".format(self.server_id))
 
         # process receiving connections from other servers
-        #asyncio.ensure_future(self.receive_connection())
-        #print("receiving connections")
         self.loop.create_task(self.receive_connection())
         
         # connections by socket to other servers in the network
@@ -98,9 +96,9 @@ class Server:
         try:
             connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             connection.connect(('127.0.0.1', BASE_PORT_NUM+server_index))
-            #TODO verbose
-            #print("{} {} connected to Server {}" \
-            #        .format(labels[self.status], self.server_id, server_index))
+            if self.verbose:
+                print("{} {} connected to Server {}" \
+                    .format(labels[self.status], self.server_id, server_index))
             self.connections[server_index] = connection
         except: print("Server {} unable to connect to Server {}" \
                         .format(self.server_id, server_index))
@@ -108,9 +106,9 @@ class Server:
 
     def _reset_timer(self):
         if self.dead: return
-        #TODO logging
-        #print("{} {} is resetting timer" \
-        #        .format(labels[self.status], self.server_id))
+        if self.verbose:
+            print("{} {} is resetting timer" \
+                .format(labels[self.status], self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
         # timeout is between self.follower_timeout and FOLLOWER_TIMEOUT+2
         self._timeout = self.follower_timeout + (random()*2)
@@ -151,9 +149,9 @@ class Server:
             if(tools.is_pickle_stream(message)):
                 rpc_dict = pickle.loads(message)
                 if rpc_dict["type"] == REQUEST_VOTE:
-                    #TODO verbose
-                    #print("Request Vote from {} received by {}" \
-                    #        .format(rpc_dict["candidate_id"], self.server_id))
+                    if self.verbose:
+                        print("Request Vote from {} received by {}" \
+                            .format(rpc_dict["candidate_id"], self.server_id))
                     term, voted = self.process_request_vote_rpc(rpc_dict)
                     self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
                 elif rpc_dict["type"] == VOTE:
@@ -197,9 +195,9 @@ class Server:
                         responder_idx, response_dict["term"]))
             self._convert_to_follower(response_dict["term"])
         elif response_dict["was_heartbeat"]:
-            #TODO logging
-            #print("{} {} received heartbeat response from {}" \
-            #        .format(labels[self.status], self.server_id, responder_idx))
+            if self.verbose:
+                print("{} {} received heartbeat response from {}" \
+                    .format(labels[self.status], self.server_id, responder_idx))
             return
         elif response_dict["success"] == False:
             print("{} {} received mismatched logs failure from {}" \
@@ -241,10 +239,9 @@ class Server:
                      "voted": voted,
                      "term": term}
         data = pickle.dumps(vote_dict)
-        #TODO verbose
-        #if voted:
-        #    print("Vote from {} {} sent to {}" \
-        #        .format(labels[self.status], self.server_id, candidate_id))
+        if self.verbose and voted:
+            print("Vote from {} {} sent to {}" \
+                .format(labels[self.status], self.server_id, candidate_id))
         self.send_data(candidate_id, data)
 
 
@@ -265,9 +262,6 @@ class Server:
         try:
             if dest_server_num in self.unreachable: return
             self.connections[dest_server_num].send(data)
-            #TODO maybe allow servers to re-enter network
-            #if dest_server_num in self.unreachable:
-            #    self.unreachable.remove(dest_server_num)
         except:
             print("{} {} unable to reach {}" \
                     .format(labels[self.status], self.server_id, dest_server_num))
@@ -290,8 +284,9 @@ class Server:
             print("Vote received by {} {} from {}" \
                     .format(labels[self.status], self.server_id, response["from"]))
         # if we've received votes from majority of servers: become leader
-        #TODO verbose
-        #print("Num votes for {} is {}".format(self.server_id, self.votes_received))
+        if self.verbose:
+            print("Num votes for {} is {}" \
+                    .format(self.server_id, self.votes_received))
         if self.votes_received > self.num_available_servers() // 2:
             self._convert_to_leader()
 
@@ -379,9 +374,9 @@ class Server:
 
         # case when it is just a heartbeat message
         if len(rpc["entries"]) == 0: 
-            #TODO logging
-            #print("{} {} received heartbeat from {}" \
-            #        .format(labels[self.status], self.server_id, rpc["leader_id"]))
+            if self.verbose:
+                print("{} {} received heartbeat from {}" \
+                    .format(labels[self.status], self.server_id, rpc["leader_id"]))
             self.execute_committed_commands(rpc)
             return self.current_term, True
 

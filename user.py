@@ -5,9 +5,6 @@ def write():
     user_input = input('\nEnter your next command:\n')
     input_parts = user_input.split(' ')
     command = input_parts[0]
-    server_id = int(input_parts[1])
-    print("Server ID: {}".format(server_id))
-    dest_port = server_id + BASE_PORT_NUM
     if command == 'cmd':
         cmd_to_send = user_input[user_input.find('\"')+1:-1]
     elif command == 'KILL':
@@ -15,6 +12,9 @@ def write():
     else:
         print("Invalid command.")
         return
+    server_id = int(input_parts[1])
+    print("Server ID: {}".format(server_id))
+    dest_port = server_id + BASE_PORT_NUM
     print("Command:", cmd_to_send)
     print("Dest Port: {}".format(dest_port))
     try:
