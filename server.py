@@ -1,9 +1,15 @@
 import asyncio
 import socket
+from random import random
+import pickle
 
 LEADER = 1
 CANDIDATE = 2
 FOLLOWER = 3
+
+APPEND_ENTRIES = 1
+REQUEST_VOTE = 2
+VOTE = 3
 
 class Server:
 
@@ -48,10 +54,17 @@ class Server:
         # start timer which will be used for follower and candidate timeouts
         self._reset_timer()
 
+        self.loop = asyncio.get_event_loop()
+
         # set up socket for this server
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind(('127.0.0.1', 50000+self.server_id))
         self.sock.listen()
+
+        # process receiving connections from other servers
+        #asyncio.ensure_future(self.receive_connection())
+        #print("receiving connections")
+        self.loop.create_task(self.receive_connection())
         
         # connections by socket to other servers in the network
         self.connections = {}
@@ -61,19 +74,22 @@ class Server:
 
     
     async def establish_connection(self, server_index):
-        try:
-            connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            connection.connect(('127.0.0.1', 50000+server_index))
-            print("Server {} connected to Server {}" \
-                    .format(self.server_id, server_index))
-            self.connections[server_index] = connection
-        except:
-            return
+        #try:
+        connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        connection.connect(('127.0.0.1', 50000+server_index))
+        print("Server {} connected to Server {}" \
+                .format(self.server_id, server_index))
+        self.connections[server_index] = connection
+        #except:
+        #    print("uh oh")
+        #    return
             
 
     def _reset_timer(self):
+        print("Server {} is resetting timer".format(self.server_id))
         if self._timer_task is not None: self._timer_task.cancel()
-        self._timeout = 2
+        # timeout is between 1.5-2.5 seconds
+        self._timeout = 1.5 + random()
         self._timer_task = asyncio.ensure_future(self._timer_job())
 
 
@@ -94,33 +110,68 @@ class Server:
             self.current_term += 1
             self.voted_for = self.server_id
             self.status = CANDIDATE
+        print("Server {} is a Candidate with term {}" \
+                .format(self.server_id, self.current_term))
         self._reset_timer()
         self.send_request_votes()
 
 
+    async def receive_msgs(self, server, addr):
+        while True:
+            message = await self.loop.sock_recv(server, 1024)
+            rpc_dict = pickle.loads(message)
+            if rpc_dict["type"] == REQUEST_VOTE:
+                print("Request Vote from {} received by {}" \
+                        .format(rpc_dict["candidate_id"], self.server_id))
+                term, voted = self.process_request_vote_rpc(rpc_dict)
+                self.send_vote_msg(rpc_dict["candidate_id"], term, voted)
+            elif rpc_dict["type"] == VOTE:
+                self.process_receive_vote_response(rpc_dict)
+
+    async def receive_connection(self):
+        while True:
+            #try:
+            server, addr = await self.loop.sock_accept(self.sock)
+            self.loop.create_task(self.receive_msgs(server, addr))
+            #except:
+            #    print("what")
+            
+    
+    def send_vote_msg(self, candidate_id, term, voted):
+        vote_dict = {"type": VOTE,
+                     "from": self.server_id,
+                     "voted": voted,
+                     "term": term}
+        data = pickle.dumps(vote_dict)
+        self.connections[candidate_id].send(data)
+
     def send_request_votes(self):
-        # TODO
-        return None
-        rpc_dict = {"candidate_term": self.current_term,
+        log_term = 0 if len(self.log) == 0 else self.log[self.last_applied][0]
+        rpc_dict = {"type": REQUEST_VOTE,
+                    "candidate_term": self.current_term,
                     "candidate_id": self.server_id,
                     "last_log_idx": self.last_applied,
-                    "last_log_term": self.log[self.last_applied][0]}
-        data = pickle.loads(rpc_dict)
-        for connection in self.connections:
+                    "last_log_term": log_term}
+        data = pickle.dumps(rpc_dict)
+        for connection in self.connections.values():
             connection.send(data)
 
 
     def process_receive_vote_response(self, response):
+        print("Vote received by {} from {}" \
+                .format(self.server_id, response["from"]))
         if self.status != CANDIDATE: return
         # if the voter is at a higher term than us, become a follower
-        if response[0] > self.current_term: self._convert_to_follower(response[0])
+        if response["term"] > self.current_term:
+            self._convert_to_follower(response["term"])
         # if the voter votes for us
-        elif response[1] == True: self.votes_received += 1
+        elif response["voted"] == True: self.votes_received += 1
         # if we've received votes from majority of servers: become leader
         if self.votes_received > self.total_num_servers // 2:
             self._convert_to_leader()
 
     def _convert_to_leader(self):
+        print("Server {} is now the Leader".format(self.server_id))
         self.status = LEADER
         self.send_heartbeats()
 
@@ -163,7 +214,7 @@ class Server:
                     "entries": logs_to_send,
                     "leader_commit": self.commit_index}
         data = pickle.loads(rpc_dict)
-        connections[i].send(data)
+        self.connections[i].send(data)
         return None
     
     def forward_received_command(self, cmd):
@@ -236,18 +287,18 @@ class Server:
 
 
     def process_request_vote_rpc(self, rpc):
-        if rpc.candidate_term < self.current_term:
+        if rpc["candidate_term"] < self.current_term:
             return self.current_term, False
         
         # if we have not yet issued a vote, or if this candidates logs
         # are at least as up to date as ours, vote for this candidate
-        if self.voted_for == None or rpc.last_log_idx >= (len(self.log)-1):
-            self.voted_for = rpc.candidate_id
-            return rpc.candidate_term, True
+        if self.voted_for == None or rpc["last_log_idx"] >= (len(self.log)-1):
+            self.voted_for = rpc["candidate_id"]
+            return rpc["candidate_term"], True
 
-        if rpc.term > self.current_term: self._convert_to_follower(rpc.term)
+        if rpc["term"] > self.current_term: self._convert_to_follower(rpc["term"])
         
-        return rpc.candidate_term, False
+        return rpc["candidate_term"], False
 
 
 
