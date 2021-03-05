@@ -47,15 +47,16 @@ py user.py
 
 ## Possible improvements
 
-* more concurrency
 * use transport libraries with better abstractions
 * visualisations of the network
+* more concurrency
+* functionality to simulate more issues that could occur in real networks
 
 ## Extra Comments
 
 * it has worked well for me up to 100 nodes, then I start to have more socket issues.
 * some more unit testing would probably be good.
-* if there are 3 nodes in the network, and one is killed, neither of the remaining nodes with win the leader election. There could be more code added for edge cases like this, or when the network size < 3.
+* if there are 3 nodes in the network, and one is killed, neither of the remaining nodes will win the leader election. There could be more code added for edge cases like this, or when the network size < 3.
 * the verbose output shows the inner workings of the algorithm, and is interesting to view when using a small network size.
 * the default starting port is 50000. I am not sure if this is optimal or not.
 
