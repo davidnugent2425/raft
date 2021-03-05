@@ -4,6 +4,8 @@
 import asyncio
 from server import Server
 
+# simple script for taking user input and running the Server class on multiple ports
+
 async def main():
     servers = []
     num_servers = None

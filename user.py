@@ -1,6 +1,8 @@
 import socket
 from server import BASE_PORT_NUM
 
+# simple script for taking user input and sending messages to ports
+
 def write():
     user_input = input('\nEnter your next command:\n')
     input_parts = user_input.split(' ')

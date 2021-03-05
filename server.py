@@ -54,6 +54,8 @@ class Server:
         # used for testing system
         self.dead = False
         self.unreachable = []
+        # size of the network
+        self.total_num_servers = total_num_servers
         
         # Variables used when the machine is a Leader:
         # (all re-initialized after each election)
@@ -66,7 +68,6 @@ class Server:
 
         # Variables used when the machine is a Candidate:
         self.votes_received = 0
-        self.total_num_servers = total_num_servers
 
         # start timer which will be used for follower and candidate timeouts
         self._reset_timer()
@@ -91,7 +92,7 @@ class Server:
             asyncio.ensure_future(self.establish_connection(i))
 
     
-    
+    # sets up connection between this server and another server in the network
     async def establish_connection(self, server_index):
         try:
             connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -103,7 +104,7 @@ class Server:
         except: print("Server {} unable to connect to Server {}" \
                         .format(self.server_id, server_index))
             
-
+    # resets the timeout to the respective value for leaders and followers
     def _reset_timer(self):
         if self.dead: return
         if self.verbose:
@@ -128,7 +129,7 @@ class Server:
             self._convert_to_candidate()
         else: self._reset_timer()
 
-
+    # converts follower to candidate or restarts election campaign
     def _convert_to_candidate(self):
         # block not executed if election restarted after timeout
         if self.status != CANDIDATE:
@@ -140,7 +141,15 @@ class Server:
         self._reset_timer()
         self.send_request_votes()
 
-
+    """
+    handles the receipt of the various possible messages:
+    REQUEST_VOTE: broadcasted by a candidate looking to get votes
+    VOTE: received by a candidate (may also say they're not voting for them)
+    APPEND_ENTRIES: sent 
+    APPEND_ENTRIES_RESPONSE:
+    FORWARDED_CMD: broadcasted by a follower so the command reaches the leader
+    else: other messages are treated as commands; executed and logged 
+    """
     async def receive_msgs(self, server, addr):
         while not self.dead:
             message = await self.loop.sock_recv(server, 1024)
@@ -179,13 +188,13 @@ class Server:
                     self.process_received_command(cmd)
                 else: self.forward_received_command(cmd)
 
-
+    # handler for receiving connections from other servers/clients
     async def receive_connection(self):
         while True:
             server, addr = await self.loop.sock_accept(self.sock)
             self.loop.create_task(self.receive_msgs(server, addr))
 
-
+    # used by Leader to handle responses from followers about their logs
     def process_append_entries_response(self, response_dict):
         responder_idx = response_dict["responder_id"]
         if response_dict["term"] > self.current_term:
@@ -216,7 +225,8 @@ class Server:
             self.match_index[responder_idx] = new_match_idx
             self.check_if_new_commit_index(new_match_idx)            
 
-
+    # used by Leader to determine up to which index in the log
+    # have the preceding entries been executed by the majority
     def check_if_new_commit_index(self, new_match_idx):
         if new_match_idx <= self.commit_index: return
         # if there is a majority of match_index[i] >= new_match_idx, and
@@ -232,7 +242,7 @@ class Server:
                 print("New commit_index of {} {} is {}" \
                         .format(labels[self.status], self.server_id, new_match_idx))
             
-    
+    # sends a VOTE message back to a candidate
     def send_vote_msg(self, candidate_id, term, voted):
         vote_dict = {"type": VOTE,
                      "from": self.server_id,
@@ -244,7 +254,7 @@ class Server:
                 .format(labels[self.status], self.server_id, candidate_id))
         self.send_data(candidate_id, data)
 
-
+    # used by a Candidate to broadcast REQUEST_VOTE messages
     def send_request_votes(self):
         log_term = 0 if len(self.log) == 0 else self.log[self.last_applied][0]
         rpc_dict = {"type": REQUEST_VOTE,
@@ -257,7 +267,7 @@ class Server:
             if i == self.server_id: continue
             self.send_data(i, data)
 
-
+    # sends data to a node in the server with a given server ID
     def send_data(self, dest_server_num, data):
         try:
             if dest_server_num in self.unreachable: return
@@ -268,11 +278,11 @@ class Server:
             if dest_server_num not in self.unreachable:
                 self.unreachable.append(dest_server_num)
 
-
+ 
     def num_available_servers(self):
         return self.total_num_servers - len(self.unreachable)
 
-
+    # used by a Candidate to correctly handle VOTE messages
     def process_receive_vote_response(self, response):
         if self.status != CANDIDATE: return
         # if the voter is at a higher term than us, become a follower
@@ -290,7 +300,7 @@ class Server:
         if self.votes_received > self.num_available_servers() // 2:
             self._convert_to_leader()
 
-
+    
     def _convert_to_leader(self):
         print("Server {} is now the Leader".format(self.server_id))
         self.status = LEADER
@@ -299,7 +309,7 @@ class Server:
         self.next_index = [len(self.log)] * self.total_num_servers
         self.send_heartbeats()
 
-
+    # used by a Leader to correctly handle a newly received command
     def process_received_command(self, cmd):
         new_log = [self.current_term, cmd]
         self.log.append(new_log)
@@ -310,7 +320,7 @@ class Server:
         self.last_applied = self.match_index[self.server_id]
         return True
 
-
+    # used by a Leader to broadcast log entries after receiving a new command
     def distribute_append_entries_rpcs(self, new_log):
         last_log_index = len(self.log)-1
         all_successful = True
@@ -323,9 +333,8 @@ class Server:
             self.send_append_entries_rpc(i, logs_to_send)
         return True
 
-
+    # used by a Leader to send an AppendEntries RPC to a follower
     def send_append_entries_rpc(self, dest_serv_id, logs_to_send):
-        #send an AppendEntries RPC to a server
         prev_log_idx = self.next_index[dest_serv_id]-1
         rpc_dict = {"type": APPEND_ENTRIES,
                     "term": self.current_term,
@@ -337,7 +346,8 @@ class Server:
         data = pickle.dumps(rpc_dict)
         self.send_data(dest_serv_id, data)
     
-
+    # used by Follower when they need to forward a command to
+    # a Leader (via broadcast)
     def forward_received_command(self, cmd):
         print("{} {} is forwarding command" \
                 .format(labels[self.status], self.server_id))
@@ -348,7 +358,8 @@ class Server:
             if i == self.server_id: continue
             self.send_data(i, data)
 
-
+    # used by a Leader to send out 'heartbeats' to followers to avoid
+    # timeouts when the network is idle
     def send_heartbeats(self):
         # send empty AppendEntries RPC to each server to avoid timeouts
         # during idle times
@@ -363,7 +374,7 @@ class Server:
             self.send_data(i, data)
         self._reset_timer()
 
-
+    # used by a Server to correctly handle the receipt of new logs
     def process_append_entries_rpc(self, rpc):
 
         # case when we receive rpc from an old leader
@@ -450,13 +461,12 @@ class Server:
         self.status = FOLLOWER
         self.voted_for = None
 
-
+    # dummy 'execute' function which just prints the command
     def execute(self, command):
-        # for now just print the command from the logs
         print("{} {} Executing command: {}" \
                 .format(labels[self.status], self.server_id, command))
 
-
+    # used by Servers to process REQUEST_VOTE messages
     def process_request_vote_rpc(self, rpc):
         if rpc["candidate_term"] < self.current_term:
             return self.current_term, False
@@ -464,10 +474,9 @@ class Server:
         # if we have not yet issued a vote, and if this candidates logs
         # are at least as up to date as ours, vote for this candidate
         if self.voted_for == None and rpc["last_log_idx"] >= (len(self.log)-1):
-
             self.voted_for = rpc["candidate_id"]
             return rpc["candidate_term"], True
-        
+
         return rpc["candidate_term"], False
 
 
